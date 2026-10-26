@@ -45,8 +45,32 @@ function openProduct(product) {
   $('#quantity-label').hidden = Boolean(product);
   form.elements.quantity.disabled = Boolean(product);
   if (product) for (const key of ['name', 'sku', 'kind', 'material', 'price', 'cost', 'notes', 'description', 'image_url', 'is_listed']) form.elements[key].value = ['price', 'cost'].includes(key) ? (product[key] / 100).toFixed(2) : product[key];
+  updateImagePreview();
   $('#product-dialog').showModal();
 }
+let previewURL;
+function updateImagePreview() {
+  if (previewURL) URL.revokeObjectURL(previewURL);
+  previewURL = null;
+  const file = $('#image-file').files[0];
+  const current = $('#product-form').elements.image_url.value.trim();
+  if (file) previewURL = URL.createObjectURL(file);
+  const source = previewURL || (/^https:\/\//.test(current) || /^\/media\/[a-f0-9]{64}\.(jpg|png|webp)$/.test(current) ? current : '');
+  $('#image-preview').hidden = !source;
+  if (source) $('#image-preview').src = source;
+  else $('#image-preview').removeAttribute('src');
+  $('#image-status').textContent = file ? '已选择：' + file.name + '，点击保存款式后上传。' : '';
+}
+$('#image-file').addEventListener('change', updateImagePreview);
+$('#product-form').elements.image_url.addEventListener('input', () => {
+  $('#image-file').value = '';
+  updateImagePreview();
+});
+$('#remove-image').onclick = () => {
+  $('#image-file').value = '';
+  $('#product-form').elements.image_url.value = '';
+  updateImagePreview();
+};
 $('#new-product').onclick = () => openProduct();
 document.addEventListener('click', event => {
   const target = event.target.closest('button');
@@ -75,6 +99,20 @@ for (const type of ['product', 'stock']) {
     form.querySelector('.form-error').textContent = '';
     let saved = false;
     try {
+      if (type === 'product') {
+        const file = $('#image-file').files[0];
+        if (file) {
+          if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('请选择 JPG、PNG 或 WebP 图片');
+          if (file.size > 5 * 1024 * 1024) throw new Error('图片超过 5 MB，请缩小后再上传');
+          $('#image-status').textContent = '正在上传图片…';
+          const uploaded = await api('/api/images', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
+          form.elements.image_url.value = uploaded.url;
+          data.image_url = uploaded.url;
+          $('#image-file').value = '';
+          updateImagePreview();
+          $('#image-status').textContent = '图片已上传，正在保存款式…';
+        }
+      }
       const path = type === 'stock' ? `/api/products/${id}/stock` : `/api/products${id ? '/' + id : ''}`;
       await api(path, { method: type === 'product' && id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
       saved = true;
@@ -83,7 +121,10 @@ for (const type of ['product', 'stock']) {
       notify(type === 'stock' ? '库存已更新，变动已记录' : '款式已保存');
     } catch (error) {
       if (saved) notify('已保存，但列表刷新失败。请点击刷新数据，勿重复提交。');
-      else form.querySelector('.form-error').textContent = error.message;
+      else {
+        form.querySelector('.form-error').textContent = error instanceof TypeError ? '无法连接后台，请确认黑色运行窗口仍开启后重试。' : error.message;
+        if (type === 'product') $('#image-status').textContent = '';
+      }
     } finally { button.disabled = false; }
   });
 }

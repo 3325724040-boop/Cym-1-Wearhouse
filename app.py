@@ -1,9 +1,12 @@
 """饰品库存管理，Python 标准库 + SQLite，无第三方运行依赖。"""
 import csv
+import hashlib
 import io
 import json
 import os
+import re
 import sqlite3
+import tempfile
 from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -11,6 +14,52 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 DB = Path(os.environ.get('WAREHOUSE_DB', str(ROOT / 'data' / 'warehouse.sqlite3')))
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+IMAGE_PATH = re.compile(r'/media/[0-9a-f]{64}\.(?:jpg|png|webp)')
+IMAGE_TYPES = {'jpg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}
+
+
+def save_image(content):
+    if not content or len(content) > MAX_IMAGE_BYTES:
+        raise ValueError('图片不能超过 5 MB')
+    if content.startswith(b'\xff\xd8\xff') and content.endswith(b'\xff\xd9'):
+        extension = 'jpg'
+    elif content.startswith(b'\x89PNG\r\n\x1a\n') and content.endswith(b'\x00\x00\x00\x00IEND\xaeB`\x82'):
+        extension = 'png'
+    elif (len(content) >= 20 and content[:4] == b'RIFF' and content[8:12] == b'WEBP'
+          and int.from_bytes(content[4:8], 'little') == len(content) - 8
+          and content[12:16] in (b'VP8 ', b'VP8L', b'VP8X')):
+        extension = 'webp'
+    else:
+        raise ValueError('请选择 JPG、PNG 或 WebP 图片，不支持网页链接、SVG 或其他文件')
+    folder = DB.parent / 'images'
+    folder.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256(content).hexdigest() + '.' + extension
+    # Publish complete files atomically; original filenames are never used as paths.
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=folder, delete=False) as file:
+            temp_name = file.name
+            file.write(content)
+        os.replace(temp_name, folder / name)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
+    return '/media/' + name
+
+
+def read_image(path, public=False):
+    if not IMAGE_PATH.fullmatch(path):
+        return None
+    if public:
+        with connect() as db:
+            if db.execute('SELECT 1 FROM products WHERE image_url=? AND is_listed=1 LIMIT 1', (path,)).fetchone() is None:
+                return None
+    file = DB.parent / 'images' / path.rsplit('/', 1)[-1]
+    try:
+        return file.read_bytes(), IMAGE_TYPES[file.suffix[1:]]
+    except FileNotFoundError:
+        return None
 
 
 def connect():
@@ -78,10 +127,13 @@ def text_field(data, key, label, required=True, limit=200):
 def save_product(data, product_id=None):
     description = text_field(data, 'description', '商品介绍', False, 3000)
     image_url = text_field(data, 'image_url', '商品图片网址', False, 2000)
-    if image_url:
+    if image_url and IMAGE_PATH.fullmatch(image_url):
+        if read_image(image_url) is None:
+            raise ValueError('已上传图片不存在，请重新选择图片')
+    elif image_url:
         image = urlparse(image_url)
         if image.scheme != 'https' or not image.hostname or image.username or image.password:
-            raise ValueError('商品图片须为 HTTPS 网址')
+            raise ValueError('请选择电脑上的图片，或填写 HTTPS 图片直链；不支持本地文件路径')
     listed = data.get('is_listed', False)
     if listed not in (True, False, '0', '1'):
         raise ValueError('上架状态不正确')
@@ -146,6 +198,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path.startswith('/media/'):
+            image = read_image(path)
+            if image is None:
+                self.send(404, {'error': '图片不存在'})
+            else:
+                self.send(200, *image)
+            return
         if path in ('/', '/app.js', '/style.css'):
             name = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css'}[path]
             types = {'html': 'text/html', 'js': 'text/javascript', 'css': 'text/css'}
@@ -174,7 +233,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send(403, {'error': '不允许跨来源操作'})
             return
         try:
+            path = urlparse(self.path).path
             length = int(self.headers.get('Content-Length', '0'))
+            if path == '/api/images' and self.command == 'POST':
+                if length < 1 or length > MAX_IMAGE_BYTES:
+                    raise ValueError('图片不能为空且不能超过 5 MB')
+                content = self.rfile.read(length)
+                if len(content) != length:
+                    raise ValueError('图片上传不完整，请重新选择')
+                self.send(201, {'url': save_image(content)})
+                return
             if length < 1 or length > 32768:
                 raise ValueError('请求内容大小不正确')
             data = json.loads(self.rfile.read(length))
@@ -195,6 +263,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send(400, {'error': str(e)})
         except LookupError as e:
             self.send(404, {'error': str(e)})
+        except OSError as e:
+            self.log_error('Write failed: %s', e)
+            self.send(500, {'error': '保存失败，请检查运行窗口及磁盘空间后重试'})
 
     do_POST = mutate
     do_PUT = mutate

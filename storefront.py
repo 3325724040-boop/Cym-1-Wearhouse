@@ -25,7 +25,13 @@ class StorefrontHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         assets = {'/': ('shop.html', 'text/html'), '/shop.js': ('shop.js', 'text/javascript'),
                   '/shop.css': ('shop.css', 'text/css')}
-        if path in assets:
+        if path.startswith('/media/'):
+            image = app.read_image(path, public=True)
+            if image is None:
+                self.send(404, {'error': '图片不存在或商品尚未上架'})
+            else:
+                self.send(200, *image)
+        elif path in assets:
             filename, content_type = assets[path]
             self.send(200, (app.ROOT / 'static' / filename).read_bytes(), content_type + '; charset=utf-8')
         elif path == '/api/catalog':

@@ -9,12 +9,7 @@ from storefront import StorefrontHandler
 import test_app
 
 
-class StorefrontTests(test_app.WarehouseTests):
-    # Reuse only the test fixture and HTTP helpers, not the warehouse test cases.
-    test_lifecycle_and_persistence = None
-    test_invalid_input_is_rejected = None
-    test_concurrent_outbound_cannot_oversell = None
-    test_export_escapes_spreadsheet_formulas_and_rejects_cross_origin = None
+class StorefrontTests(test_app.WarehouseFixture):
 
     def setUp(self):
         super().setUp()
@@ -69,3 +64,15 @@ class StorefrontTests(test_app.WarehouseTests):
         _, data = self.product()
         for image in ['javascript:alert(1)', 'http://example.com/a.jpg', 'https://user:pass@example.com/a.jpg']:
             self.assertEqual(self.request('/api/products', 'POST', data | {'sku': 'BAD', 'image_url': image})[0], 400)
+
+    def test_uploaded_images_are_available_only_for_listed_products(self):
+        status, body = self.request('/api/images', 'POST', test_app.TEST_PNG)
+        self.assertEqual(status, 201)
+        url = json.loads(body)['url']
+        self.assertEqual(self.public_request(url)[0], 404)
+        product_id, data = self.product(image_url=url, is_listed='1')
+        self.assertEqual(self.public_request(url), (200, test_app.TEST_PNG))
+        self.assertEqual(json.loads(self.public_request('/api/catalog')[1])[0]['image_url'], url)
+        self.assertEqual(self.public_request('/api/images', 'POST', test_app.TEST_PNG)[0], 405)
+        self.request(f'/api/products/{product_id}', 'PUT', data | {'is_listed': '0'})
+        self.assertEqual(self.public_request(url)[0], 404)
