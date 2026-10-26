@@ -1,9 +1,9 @@
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const price = cents => new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(cents / 100);
-let items = [], kind = '';
-function image(product) {
-  return product.image_url ? `<img src="${esc(product.image_url)}" alt="${esc(product.name)}" loading="lazy" referrerpolicy="no-referrer">` : '<div class="no-image"><span>◇</span><small>商品图片待补充</small></div>';
+let items = [], kind = '', detailProduct = null, detailIndex = 0;
+function image(product, source = product.image_url) {
+  return source ? `<img src="${esc(source)}" alt="${esc(product.name)}" loading="lazy" referrerpolicy="no-referrer">` : '<div class="no-image"><span>◇</span><small>商品图片待补充</small></div>';
 }
 function render() {
   const query = $('#search').value.trim().toLowerCase();
@@ -15,10 +15,33 @@ function render() {
   $('#empty p').textContent = items.length ? '换个关键词或分类再看看。' : '欢迎稍后再来，或联系店主了解详情。';
 }
 function showDetail(product) {
+  detailProduct = product; detailIndex = 0;
   $('#detail-content').innerHTML = `<div class="detail-photo">${image(product)}</div><p class="eyebrow">${esc(product.sku)} · ${product.kind === '新款' ? '新品' : '经典款'}</p><h2>${esc(product.name)}</h2><p>${esc(product.material)} · ${product.in_stock ? '有现货' : '暂时缺货，请咨询补货时间'}</p><strong class="detail-price">${price(product.price)}</strong><p class="description">${esc(product.description || '更多款式细节，欢迎联系店主咨询。')}</p>`;
+  const urls = product.images || (product.image_url ? [product.image_url] : []);
+  if (urls.length > 1) {
+    const gallery = document.createElement('div'); gallery.className = 'detail-gallery';
+    gallery.innerHTML = `<div class="gallery-navigation"><button type="button" data-step="-1" aria-label="上一张图片">← 上一张</button><span id="gallery-position">1 / ${urls.length}</span><button type="button" data-step="1" aria-label="下一张图片">下一张 →</button></div><div class="detail-thumbnails">${urls.map((url,index) => `<button type="button" data-image-index="${index}" aria-label="查看第 ${index+1} 张图片" aria-pressed="${index===0}">${image(product,url)}</button>`).join('')}</div>`;
+    $('#detail-content .detail-photo').after(gallery);
+  }
   $('#detail').showModal();
 }
+function selectDetailImage(index) {
+  const urls = detailProduct?.images || [];
+  if (!urls.length) return;
+  detailIndex = (index + urls.length) % urls.length;
+  $('#detail-content .detail-photo').innerHTML = image(detailProduct, urls[detailIndex]);
+  if ($('#gallery-position')) $('#gallery-position').textContent = `${detailIndex+1} / ${urls.length}`;
+  document.querySelectorAll('[data-image-index]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.imageIndex) === detailIndex)));
+}
+ document.addEventListener('keydown', event => {
+  if (!$('#detail').open || !['ArrowLeft','ArrowRight'].includes(event.key)) return;
+  event.preventDefault(); selectDetailImage(detailIndex + (event.key === 'ArrowRight' ? 1 : -1));
+});
 document.addEventListener('click', event => {
+  const thumb = event.target.closest('[data-image-index]');
+  if (thumb) selectDetailImage(Number(thumb.dataset.imageIndex));
+  const step = event.target.closest('[data-step]');
+  if (step) selectDetailImage(detailIndex + Number(step.dataset.step));
   const tab = event.target.closest('[data-kind]');
   if (tab) {
     kind = tab.dataset.kind;

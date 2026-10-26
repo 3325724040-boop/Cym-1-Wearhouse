@@ -126,6 +126,38 @@ class WarehouseTests(WarehouseFixture):
         _, data = self.product()
         self.assertEqual(self.request('/api/products', 'POST', data | {'sku': 'MISSING', 'image_url': '/media/' + 'a' * 64 + '.png'})[0], 400)
 
+    def test_gallery_limit_order_rejection_and_legacy_edit(self):
+        urls = [f'https://example.com/product-{i}.jpg' for i in range(9)]
+        product_id, data = self.product(images=urls)
+        saved = json.loads(self.request('/api/products')[1])[0]
+        self.assertEqual(saved['images'], urls)
+        self.assertEqual(saved['image_url'], urls[0])
+        # Old clients changing text but retaining the main URL must not discard detail photos.
+        legacy = data.copy()
+        del legacy['images']
+        legacy.update(image_url=urls[0], name='编辑后名称')
+        self.assertEqual(self.request(f'/api/products/{product_id}', 'PUT', legacy)[0], 200)
+        self.assertEqual(json.loads(self.request('/api/products')[1])[0]['images'], urls)
+        for invalid in [urls + ['https://example.com/ten.jpg'], urls[:1] * 2, 'not-a-list', [None], ['file:///D:/x.png']]:
+            self.assertEqual(self.request(f'/api/products/{product_id}', 'PUT', data | {'images': invalid})[0], 400)
+        self.assertEqual(json.loads(self.request('/api/products')[1])[0]['images'], urls)
+        self.assertEqual(self.request(f'/api/products/{product_id}', 'PUT', data | {'images': []})[0], 200)
+        app.initialize()
+        saved = json.loads(self.request('/api/products')[1])[0]
+        self.assertEqual((saved['images'], saved['image_url'], saved['quantity']), ([], '', 5))
+
+    def test_old_single_image_database_migrates_without_stock_changes(self):
+        product_id, data = self.product(image_url='https://example.com/old.jpg')
+        self.request(f'/api/products/{product_id}/stock', 'POST', dict(direction='in', amount=3, reason='旧版入库'))
+        with app.connect() as db:
+            db.execute('DROP TABLE product_images')
+        app.initialize()
+        app.initialize()
+        saved = json.loads(self.request('/api/products')[1])[0]
+        self.assertEqual(saved['images'], ['https://example.com/old.jpg'])
+        self.assertEqual((saved['quantity'], saved['cost'], saved['sku']), (8, 1235, data['sku']))
+        self.assertEqual(len(json.loads(self.request('/api/movements')[1])), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

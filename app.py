@@ -53,7 +53,7 @@ def read_image(path, public=False):
         return None
     if public:
         with connect() as db:
-            if db.execute('SELECT 1 FROM products WHERE image_url=? AND is_listed=1 LIMIT 1', (path,)).fetchone() is None:
+            if db.execute('SELECT 1 FROM product_images i JOIN products p ON p.id=i.product_id WHERE i.url=? AND p.is_listed=1 LIMIT 1', (path,)).fetchone() is None:
                 return None
     file = DB.parent / 'images' / path.rsplit('/', 1)[-1]
     try:
@@ -90,6 +90,23 @@ def initialize():
                                  ('image_url', "TEXT NOT NULL DEFAULT ''")]:
             if name not in columns:
                 db.execute(f'ALTER TABLE products ADD COLUMN {name} {definition}')
+        db.execute('''CREATE TABLE IF NOT EXISTS product_images (
+            product_id INTEGER NOT NULL REFERENCES products(id), position INTEGER NOT NULL,
+            url TEXT NOT NULL, PRIMARY KEY(product_id, position), UNIQUE(product_id,url))''')
+        db.execute('''INSERT INTO product_images(product_id,position,url)
+            SELECT p.id,0,p.image_url FROM products p WHERE p.image_url != ''
+            AND NOT EXISTS (SELECT 1 FROM product_images i WHERE i.product_id=p.id)''')
+
+
+def with_images(db, rows):
+    products = [dict(row) for row in rows]
+    galleries = {p['id']: [] for p in products}
+    for row in db.execute('SELECT product_id,url FROM product_images ORDER BY product_id,position'):
+        if row['product_id'] in galleries:
+            galleries[row['product_id']].append(row['url'])
+    for product in products:
+        product['images'] = galleries[product['id']]
+    return products
 
 
 def integer(value, label, minimum=0):
@@ -127,13 +144,29 @@ def text_field(data, key, label, required=True, limit=200):
 def save_product(data, product_id=None):
     description = text_field(data, 'description', '商品介绍', False, 3000)
     image_url = text_field(data, 'image_url', '商品图片网址', False, 2000)
-    if image_url and IMAGE_PATH.fullmatch(image_url):
-        if read_image(image_url) is None:
-            raise ValueError('已上传图片不存在，请重新选择图片')
-    elif image_url:
-        image = urlparse(image_url)
-        if image.scheme != 'https' or not image.hostname or image.username or image.password:
-            raise ValueError('请选择电脑上的图片，或填写 HTTPS 图片直链；不支持本地文件路径')
+    images = data.get('images')
+    if 'images' not in data:
+        images = [image_url] if image_url else []
+        if product_id and image_url:
+            with connect() as db:
+                old = [r['url'] for r in db.execute('SELECT url FROM product_images WHERE product_id=? ORDER BY position', (product_id,))]
+                if old and old[0] == image_url:
+                    images = old
+    if not isinstance(images, list) or len(images) > 9:
+        raise ValueError('每款商品最多 9 张图片')
+    for url in images:
+        if not isinstance(url, str) or not url.strip() or len(url) > 2000:
+            raise ValueError('图片地址格式不正确')
+        if IMAGE_PATH.fullmatch(url):
+            if read_image(url) is None:
+                raise ValueError('已上传图片不存在，请重新选择图片')
+        else:
+            image = urlparse(url)
+            if image.scheme != 'https' or not image.hostname or image.username or image.password:
+                raise ValueError('请选择电脑上的图片，或填写 HTTPS 图片直链；不支持本地文件路径')
+    if len(set(images)) != len(images):
+        raise ValueError('同一款商品不能重复添加相同图片')
+    image_url = images[0] if images else ''
     listed = data.get('is_listed', False)
     if listed not in (True, False, '0', '1'):
         raise ValueError('上架状态不正确')
@@ -156,6 +189,9 @@ def save_product(data, product_id=None):
                 raise LookupError('产品不存在')
         db.execute('UPDATE products SET description=?,image_url=?,is_listed=? WHERE id=?',
                    (description, image_url, is_listed, product_id))
+        db.execute('DELETE FROM product_images WHERE product_id=?', (product_id,))
+        db.executemany('INSERT INTO product_images(product_id,position,url) VALUES(?,?,?)',
+                       [(product_id, index, url) for index, url in enumerate(images)])
     return product_id
 
 
@@ -205,14 +241,14 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send(200, *image)
             return
-        if path in ('/', '/app.js', '/style.css'):
-            name = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css'}[path]
+        if path in ('/', '/app.js', '/gallery.js', '/style.css'):
+            name = {'/': 'index.html', '/app.js': 'app.js', '/gallery.js': 'gallery.js', '/style.css': 'style.css'}[path]
             types = {'html': 'text/html', 'js': 'text/javascript', 'css': 'text/css'}
             self.send(200, (ROOT / 'static' / name).read_bytes(), types[name.split('.')[-1]] + '; charset=utf-8')
             return
         with connect() as db:
             if path == '/api/products':
-                self.send(200, [dict(r) for r in db.execute('SELECT * FROM products ORDER BY id DESC')])
+                self.send(200, with_images(db, db.execute('SELECT * FROM products ORDER BY id DESC')))
             elif path == '/api/movements':
                 self.send(200, [dict(r) for r in db.execute('SELECT m.*,p.name,p.sku FROM movements m JOIN products p ON p.id=m.product_id ORDER BY m.id DESC LIMIT 200')])
             elif path == '/api/export':

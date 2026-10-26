@@ -37,10 +37,10 @@ class StorefrontHandler(BaseHTTPRequestHandler):
         elif path == '/api/catalog':
             with app.connect() as db:
                 # Explicit public allowlist: never serialize private product rows.
-                items = [dict(r) for r in db.execute('''
+                items = app.with_images(db, db.execute('''
                     SELECT id,sku,name,kind,material,price,description,image_url,
                       CASE WHEN quantity > 0 THEN 1 ELSE 0 END AS in_stock
-                    FROM products WHERE is_listed=1 ORDER BY id DESC''')]
+                    FROM products WHERE is_listed=1 ORDER BY id DESC'''))
             self.send(200, items)
         elif path == '/api/shop':
             self.send(200, {'name': os.environ.get('SHOP_NAME', '饰物集'),

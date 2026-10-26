@@ -39,7 +39,7 @@ class StorefrontTests(test_app.WarehouseFixture):
         self.assertEqual(status, 200)
         catalog = json.loads(body)
         self.assertEqual(len(catalog), 1)
-        self.assertEqual(set(catalog[0]), {'id', 'sku', 'name', 'kind', 'material', 'price', 'description', 'image_url', 'in_stock'})
+        self.assertEqual(set(catalog[0]), {'id', 'sku', 'name', 'kind', 'material', 'price', 'description', 'image_url', 'images', 'in_stock'})
         self.assertEqual(catalog[0]['description'], '客户可见介绍')
         self.assertNotIn('内部供应商信息', body.decode())
         self.assertNotIn('PRIVATE', body.decode())
@@ -76,3 +76,20 @@ class StorefrontTests(test_app.WarehouseFixture):
         self.assertEqual(self.public_request('/api/images', 'POST', test_app.TEST_PNG)[0], 405)
         self.request(f'/api/products/{product_id}', 'PUT', data | {'is_listed': '0'})
         self.assertEqual(self.public_request(url)[0], 404)
+
+    def test_gallery_secondary_image_visibility_and_order(self):
+        import struct
+        import zlib
+        note = b'comment\x00second product photo'
+        chunk = struct.pack('>I', len(note)) + b'tEXt' + note + struct.pack('>I', zlib.crc32(b'tEXt' + note))
+        photo2 = test_app.TEST_PNG[:-12] + chunk + test_app.TEST_PNG[-12:]
+        first = json.loads(self.request('/api/images', 'POST', test_app.TEST_PNG)[1])['url']
+        second = json.loads(self.request('/api/images', 'POST', photo2)[1])['url']
+        product_id, data = self.product(images=[first, second], is_listed='1')
+        self.assertEqual(self.public_request(second), (200, photo2))
+        self.assertEqual(json.loads(self.public_request('/api/catalog')[1])[0]['images'], [first, second])
+        self.request(f'/api/products/{product_id}', 'PUT', data | {'images': [second, first]})
+        self.assertEqual(json.loads(self.public_request('/api/catalog')[1])[0]['image_url'], second)
+        self.request(f'/api/products/{product_id}', 'PUT', data | {'images': [first]})
+        self.assertEqual(self.public_request(second)[0], 404)
+        self.assertEqual(self.public_request(first)[0], 200)
