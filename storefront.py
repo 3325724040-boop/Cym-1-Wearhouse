@@ -60,8 +60,16 @@ class StorefrontHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    app.initialize()
-    host = os.environ.get('SHOP_HOST', '127.0.0.1')
-    port = int(os.environ.get('SHOP_PORT', '8001'))
-    print(f'商品展示站已启动，监听 {host}:{port}', flush=True)
-    ThreadingHTTPServer((host, port), StorefrontHandler).serve_forever()
+    from updater import project_lock, UpdateError
+    try:
+        with project_lock(app.ROOT, ('shop',)):
+            app.initialize()
+            host = os.environ.get('SHOP_HOST', '127.0.0.1')
+            port = int(os.environ.get('SHOP_PORT', '8001'))
+            print(f'商品展示站已启动，监听 {host}:{port}', flush=True)
+            with ThreadingHTTPServer((host, port), StorefrontHandler) as server:
+                server.serve_forever()
+    except UpdateError as error:
+        raise SystemExit(str(error))
+    except KeyboardInterrupt:
+        pass

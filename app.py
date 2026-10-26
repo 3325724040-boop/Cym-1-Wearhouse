@@ -308,8 +308,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    initialize()
-    host = os.environ.get('HOST', '127.0.0.1')
-    port = int(os.environ.get('PORT', '8000'))
-    print(f'饰品库存管理已启动，监听 {host}:{port}', flush=True)
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    from updater import project_lock, UpdateError
+    try:
+        with project_lock(ROOT, ('admin',)):
+            initialize()
+            host = os.environ.get('HOST', '127.0.0.1')
+            port = int(os.environ.get('PORT', '8000'))
+            print(f'饰品库存管理已启动，监听 {host}:{port}', flush=True)
+            with ThreadingHTTPServer((host, port), Handler) as server:
+                server.serve_forever()
+    except UpdateError as error:
+        raise SystemExit(str(error))
+    except KeyboardInterrupt:
+        pass

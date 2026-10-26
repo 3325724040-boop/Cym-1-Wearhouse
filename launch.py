@@ -6,6 +6,7 @@ from http.server import ThreadingHTTPServer
 
 import app
 from storefront import StorefrontHandler
+from updater import project_lock, UpdateError
 
 
 def main():
@@ -52,4 +53,9 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    try:
+        with project_lock(app.ROOT, ('admin', 'shop')):
+            raise SystemExit(main())
+    except UpdateError as error:
+        print(error)
+        raise SystemExit(1)
