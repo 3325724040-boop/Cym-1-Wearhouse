@@ -25,7 +25,7 @@ function render() {
   const stock = $('#stock-filter').value;
   const shown = products.filter(p => `${p.name} ${p.sku} ${p.material}`.toLowerCase().includes(term) && (!kind || p.kind === kind) && (!stock || (stock === 'empty' ? p.quantity === 0 : p.quantity > 0)));
   $('#result-count').textContent = shown.length;
-  $('#products').innerHTML = shown.map(p => `<tr><td><strong>${escapeHTML(p.name)}</strong><small>${escapeHTML(p.sku)} · ${p.is_listed ? '已上架' : '未上架'}</small></td><td><span class="badge ${p.kind === '新款' ? 'new' : ''}">${p.kind}</span></td><td>${escapeHTML(p.material)}</td><td><b class="${p.quantity === 0 ? 'zero' : ''}">${p.quantity}</b><span class="muted"> 件</span></td><td>${yuan(p.price)}</td><td class="muted">${yuan(p.cost)}</td><td class="row-actions"><button class="link" data-edit="${p.id}">编辑</button><button class="link" data-stock="${p.id}">出入库</button></td></tr>`).join('');
+  $('#products').innerHTML = shown.map(p => `<tr><td><strong>${escapeHTML(p.name)}</strong><small>${escapeHTML(p.sku)}</small></td><td><span class="badge ${p.kind === '新款' ? 'new' : ''}">${p.kind}</span></td><td>${escapeHTML(p.material)}</td><td><b class="${p.quantity === 0 ? 'zero' : ''}">${p.quantity}</b><span class="muted"> 件</span></td><td>${yuan(p.price)}</td><td class="muted">${yuan(p.cost)}</td><td class="row-actions"><button class="link" data-edit="${p.id}">编辑</button><button class="link" data-stock="${p.id}">出入库</button></td></tr>`).join('');
   $('#empty').hidden = shown.length > 0;
   $('#empty h3').textContent = products.length ? '没有找到匹配的款式' : '从第一款饰品开始';
   $('#empty p').textContent = products.length ? '试试其他关键词或筛选条件。' : '点击「新增款式」，录入材质、价格与初始库存。';
@@ -44,7 +44,7 @@ function openProduct(product) {
   $('#form-title').textContent = product ? '编辑款式' : '新增款式';
   $('#quantity-label').hidden = Boolean(product);
   form.elements.quantity.disabled = Boolean(product);
-  if (product) for (const key of ['name', 'sku', 'kind', 'material', 'price', 'cost', 'notes', 'description', 'is_listed']) form.elements[key].value = ['price', 'cost'].includes(key) ? (product[key] / 100).toFixed(2) : product[key];
+  if (product) for (const key of ['name', 'sku', 'kind', 'material', 'price', 'cost', 'notes']) form.elements[key].value = ['price', 'cost'].includes(key) ? (product[key] / 100).toFixed(2) : product[key];
   galleryEditor.open(product?.images || (product?.image_url ? [product.image_url] : []));
   $('#product-dialog').showModal();
 }
