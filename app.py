@@ -48,13 +48,9 @@ def save_image(content):
     return '/media/' + name
 
 
-def read_image(path, public=False):
+def read_image(path):
     if not IMAGE_PATH.fullmatch(path):
         return None
-    if public:
-        with connect() as db:
-            if db.execute('SELECT 1 FROM product_images i JOIN products p ON p.id=i.product_id WHERE i.url=? AND p.is_listed=1 LIMIT 1', (path,)).fetchone() is None:
-                return None
     file = DB.parent / 'images' / path.rsplit('/', 1)[-1]
     try:
         return file.read_bytes(), IMAGE_TYPES[file.suffix[1:]]
@@ -142,7 +138,6 @@ def text_field(data, key, label, required=True, limit=200):
 
 
 def save_product(data, product_id=None):
-    description = text_field(data, 'description', '商品介绍', False, 3000)
     image_url = text_field(data, 'image_url', '商品图片网址', False, 2000)
     images = data.get('images')
     if 'images' not in data:
@@ -167,10 +162,6 @@ def save_product(data, product_id=None):
     if len(set(images)) != len(images):
         raise ValueError('同一款商品不能重复添加相同图片')
     image_url = images[0] if images else ''
-    listed = data.get('is_listed', False)
-    if listed not in (True, False, '0', '1'):
-        raise ValueError('上架状态不正确')
-    is_listed = int(listed is True or listed == '1')
     fields = (text_field(data, 'name', '款式名称'), text_field(data, 'sku', '款式编号'),
               text_field(data, 'kind', '款式分类'), text_field(data, 'material', '材质'),
               money(data.get('price')), money(data.get('cost')),
@@ -187,8 +178,7 @@ def save_product(data, product_id=None):
             cur = db.execute('UPDATE products SET name=?,sku=?,kind=?,material=?,price=?,cost=?,notes=? WHERE id=?', fields + (product_id,))
             if cur.rowcount == 0:
                 raise LookupError('产品不存在')
-        db.execute('UPDATE products SET description=?,image_url=?,is_listed=? WHERE id=?',
-                   (description, image_url, is_listed, product_id))
+        db.execute('UPDATE products SET image_url=? WHERE id=?', (image_url, product_id))
         db.execute('DELETE FROM product_images WHERE product_id=?', (product_id,))
         db.executemany('INSERT INTO product_images(product_id,position,url) VALUES(?,?,?)',
                        [(product_id, index, url) for index, url in enumerate(images)])
