@@ -20,9 +20,10 @@ REPOSITORY = '3325724040-boop/Cym-1-Wearhouse'
 TRUSTED_HOSTS = {'github.com', 'codeload.github.com'}
 MAX_DOWNLOAD = 50 * 1024 * 1024
 MAX_EXPANDED = 100 * 1024 * 1024
-REQUIRED = {'app.py', 'storefront.py', 'launch.py', 'updater.py', 'start-windows.bat',
-            'static/index.html', 'static/app.js', 'static/gallery.js', 'static/style.css',
-            'static/shop.html', 'static/shop.js', 'static/shop.css'}
+REQUIRED = {'app.py', 'launch.py', 'updater.py', 'start-windows.bat',
+            'static/index.html', 'static/app.js', 'static/gallery.js', 'static/style.css'}
+OBSOLETE = {'storefront.py', 'static/shop.html', 'static/shop.js', 'static/shop.css',
+            'tests/test_storefront.py'}
 ROOT_FILES = REQUIRED | {'README.md', 'Windows使用说明.txt'}
 
 
@@ -62,7 +63,7 @@ def project_lock(root, roles):
 
 
 def ensure_stopped():
-    for port in {8000, 8001, int(os.environ.get('PORT', '8000')), int(os.environ.get('SHOP_PORT', '8001'))}:
+    for port in {8000, 8001, int(os.environ.get('PORT', '8000'))}:
         with socket.socket() as probe:
             probe.settimeout(0.5)
             if probe.connect_ex(('127.0.0.1', port)) == 0:
@@ -208,7 +209,8 @@ def copy_atomic(source, target):
 
 def install(root, stage, names, commit):
     """Back up before modifying managed code; business data is never replaced."""
-    preflight(root, names)
+    managed_names = sorted(set(names) | OBSOLETE)
+    preflight(root, managed_names)
     backups = root.parent / (root.name + '-backups')
     reject_links(backups)
     backups.mkdir(exist_ok=True)
@@ -218,13 +220,13 @@ def install(root, stage, names, commit):
     # Complete backup must succeed before the first code file is touched.
     if (root / 'data').exists():
         shutil.copytree(root / 'data', backup / 'data')
-    for name in names:
+    for name in managed_names:
         if (root / name).exists():
             destination = backup / 'code' / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(root / name, destination)
             existing.append(name)
-    manifest = {'commit': commit, 'existing': existing, 'managed': names, 'backup': str(backup.resolve()),
+    manifest = {'commit': commit, 'existing': existing, 'managed': managed_names, 'backup': str(backup.resolve()),
                 'hashes': {name: hashlib.sha256((backup / 'code' / name).read_bytes()).hexdigest() for name in existing}}
     (backup / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     runtime = root / '.runtime'; runtime.mkdir(exist_ok=True)
@@ -232,8 +234,11 @@ def install(root, stage, names, commit):
     copy_atomic(backup / 'manifest.json', pending)
     changed = []
     try:
-        for name in names:
-            copy_atomic(stage / name, root / name)
+        for name in managed_names:
+            if name in names:
+                copy_atomic(stage / name, root / name)
+            else:
+                (root / name).unlink(missing_ok=True)
             changed.append(name)
     except (Exception, KeyboardInterrupt) as error:
         failures = []
@@ -297,7 +302,8 @@ def main():
                 print(f'Version: {commit[:12]}. Checking downloaded code...', flush=True)
                 validate_stage(stage, names)
                 preflight(root, names)
-                if all((root / name).is_file() and hashlib.sha256((root / name).read_bytes()).digest() == hashlib.sha256((stage / name).read_bytes()).digest() for name in names):
+                if (all((root / name).is_file() and hashlib.sha256((root / name).read_bytes()).digest() == hashlib.sha256((stage / name).read_bytes()).digest() for name in names)
+                        and not any((root / name).exists() for name in OBSOLETE)):
                     print('Already up to date. Data unchanged.', flush=True)
                     return 0
                 print('Backing up inventory, photos and existing code...', flush=True)
